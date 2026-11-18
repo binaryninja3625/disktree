@@ -18,6 +18,8 @@ Omarchy theme and behaves like the rest of the desktop.
 
 ## Install
 
+**Self-updating (Linux):** `git clone https://github.com/binaryninja3625/disktree ~/src/disktree && bash ~/src/disktree/packaging/disktree-launch --install` builds and installs it (needs Rust). Opening disktree from the app menu then checks GitHub first and rebuilds when there's a newer commit. `DISKTREE_NO_UPDATE=1` skips the check.
+
 Download `disktree-*-x86_64-linux.tar.gz` (`aarch64-linux` on ARM) from the
 [latest release](https://github.com/tobi/disktree/releases/latest), unpack
 it, and run `./install.sh` inside (or just copy `disktree` onto your

@@ -1,0 +1,113 @@
+#!/usr/bin/env bash
+# disktree launcher: checks GitHub for a newer version, updates if there is one, then opens disktree.
+#
+# First install:  git clone https://github.com/binaryninja3625/disktree ~/src/disktree && bash ~/src/disktree/packaging/disktree-launch --install
+# After that, open disktree from the app menu as usual; it keeps itself up to date.
+# DISKTREE_NO_UPDATE=1 skips the check. Offline or signed out of gh, it just opens what's installed.
+set -u
+
+app="disktree"
+repo="binaryninja3625/disktree"
+name="disktree"
+bindir=${XDG_BIN_HOME:-$HOME/.local/bin}
+datadir=${XDG_DATA_HOME:-$HOME/.local/share}
+appdir=$datadir/applications
+state=$datadir/$name
+self=$(readlink -f "$0")
+
+notify() {
+    command -v notify-send >/dev/null && notify-send -a "$app" -i "disktree" "$1" "${2:-}" 2>/dev/null || true
+}
+
+# Install a file without disturbing a copy that's running: write beside it, then rename.
+put() {
+    local tmp
+    mkdir -p "$(dirname "$2")" && tmp=$(mktemp "$2.XXXXXX") && cp "$1" "$tmp" && chmod "$3" "$tmp" && mv -f "$tmp" "$2"
+}
+
+ghapi() { command -v gh >/dev/null && timeout 15 gh api "$@" 2>/dev/null; }
+
+in_terminal() {
+    if command -v konsole >/dev/null; then
+        konsole --separate --nofork -p tabtitle="Updating $app" -e "$@"
+    elif command -v kgx >/dev/null; then
+        kgx --wait -- "$@"
+    elif command -v xterm >/dev/null; then
+        xterm -T "Updating $app" -e "$@"
+    else
+        "$@" </dev/null >"$state/update.log" 2>&1
+    fi
+}
+
+fail_pause() {
+    echo
+    echo "The update didn't finish. $app opens with the version you already have."
+    read -rp "Press Enter to continue." _ || true
+}
+
+# ---- built from a clone of the repository ------------------------------------------------------
+src=${DISKTREE_SRC:-$HOME/src/disktree}
+stamp=$state/installed-commit
+
+latest_commit() {
+    ghapi "repos/$repo/commits/HEAD" --jq .sha && return
+    timeout 15 git ls-remote "https://github.com/$repo.git" HEAD 2>/dev/null | cut -f1
+}
+
+needs_update() {
+    [ "${DISKTREE_NO_UPDATE:-0}" = 1 ] && return 1
+    local latest
+    latest=$(latest_commit)
+    [ -n "$latest" ] && [ "$latest" != "$(cat "$stamp" 2>/dev/null)" ]
+}
+
+fetch_source() {
+    if [ -d "$src/.git" ]; then
+        git -C "$src" pull --ff-only
+    elif command -v gh >/dev/null; then
+        mkdir -p "$(dirname "$src")" && gh repo clone "$repo" "$src"
+    else
+        mkdir -p "$(dirname "$src")" && git clone "https://github.com/$repo.git" "$src"
+    fi
+}
+
+build_and_install() {
+    if ! command -v cargo >/dev/null; then
+        echo "Building disktree needs Rust. Install it with:  sudo pacman -S rust"
+        return 1
+    fi
+    make -C "$src" install PREFIX="$HOME/.local" BINDIR="$bindir" APPDIR="$appdir" || return 1
+    # Open through this launcher, so the menu entry keeps disktree up to date.
+    sed -i -e "s|^Exec=.*/disktree --disk\$|Exec=$bindir/disktree-launch --disk|" \
+           -e "s|^Exec=.*/disktree %f\$|Exec=$bindir/disktree-launch %f|" "$appdir/disktree.desktop"
+}
+
+case "${1:-}" in
+    --update)
+        # Pull, then hand over to the freshly pulled launcher so new install steps apply.
+        echo "Updating $app…"
+        mkdir -p "$state"
+        if fetch_source; then
+            exec bash "$src/packaging/$name-launch" --install
+        fi
+        fail_pause
+        exit 0 ;;
+    --install)
+        mkdir -p "$state" "$bindir" "$appdir"
+        if build_and_install && put "$src/packaging/$name-launch" "$bindir/$name-launch" 755 \
+                && git -C "$src" rev-parse HEAD >"$stamp"; then
+            echo "$app is up to date."
+            sleep 1
+        else
+            fail_pause
+        fi
+        exit 0 ;;
+esac
+
+if needs_update; then
+    notify "Updating $app" "This takes a minute or two; $app opens when it's done."
+    mkdir -p "$state"
+    in_terminal bash "$self" --update
+fi
+
+exec "$bindir/disktree" "$@"
